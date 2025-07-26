@@ -12,14 +12,16 @@ datasource db {
 
 // ユーザーモデル（学習者、保護者、教育者）
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  password  String?  // NextAuth.js認証用（OAuth使用時はnull）
-  role      UserRole @default(LEARNER)
-  avatar    String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  name          String
+  password      String?   // NextAuth.js認証用（OAuth使用時はnull）
+  role          UserRole  @default(LEARNER)
+  image         String?   // プロフィール画像URL
+  avatar        String?   // 旧フィールド（互換性のため残す）
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   // 学習者の場合
   grade         Int?
