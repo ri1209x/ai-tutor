@@ -1,0 +1,410 @@
+// スマートチューター データベーススキーマ
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ユーザーモデル（学習者、保護者、教育者）
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  password  String?  // NextAuth.js認証用（OAuth使用時はnull）
+  role      UserRole @default(LEARNER)
+  avatar    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 学習者の場合
+  grade         Int?
+  birthDate     DateTime?
+  learningStyle LearningStyle?
+  parentId      String?
+  parent        User?          @relation("ParentChild", fields: [parentId], references: [id])
+  children      User[]         @relation("ParentChild")
+
+  // 学習進捗
+  learningProgress LearningProgress[]
+  assessments      Assessment[]
+  answers          Answer[]
+  assessmentSessions AssessmentSession[]
+  assessmentResults  AssessmentResult[]
+  learningStyleResults LearningStyleResult[]
+  
+  // 教育者の場合
+  createdCourses Course[] @relation("CourseCreator")
+  
+  @@map("users")
+}
+
+// コースモデル
+model Course {
+  id          String   @id @default(cuid())
+  title       String
+  description String?
+  subject     Subject
+  grade       Int
+  difficulty  Difficulty
+  isPublic    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 関連
+  creatorId String
+  creator   User   @relation("CourseCreator", fields: [creatorId], references: [id])
+  lessons   Lesson[]
+  learningProgress LearningProgress[]
+  
+  @@map("courses")
+}
+
+// レッスンモデル
+model Lesson {
+  id          String     @id @default(cuid())
+  title       String
+  description String?
+  content     String     // レッスンコンテンツ（Markdown形式）
+  order       Int        // コース内での順序
+  lessonType  LessonType @default(LECTURE)
+  duration    Int?       // 推定学習時間（分）
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  // 関連
+  courseId  String
+  course    Course     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  questions Question[]
+  learningProgress LearningProgress[]
+  
+  @@map("lessons")
+}
+
+// 問題モデル（拡張版）
+model Question {
+  id           String       @id @default(cuid())
+  title        String?      // 問題タイトル
+  content      String       // 問題文
+  questionType QuestionType
+  options      String[]     // 選択肢（JSON配列）
+  correctAnswer String      // 正解
+  explanation  String?      // 解説
+  hints        String[]     // ヒント（配列）
+  difficulty   Difficulty   @default(MEDIUM)
+  points       Int          @default(1)
+  estimatedTime Int?        // 推定解答時間（秒）
+  subject      String?      // 科目
+  topic        String?      // 単元・トピック
+  keywords     String[]     // キーワード（検索用）
+  isPublic     Boolean      @default(true)
+  isActive     Boolean      @default(true)
+  usageCount   Int          @default(0) // 使用回数
+  averageScore Float?       // 平均正答率
+  createdBy    String?      // 作成者ID
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  // 関連
+  lessonId String?
+  lesson   Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  answers  Answer[]
+  questionTags QuestionTag[]
+  questionCategories QuestionCategory[]
+
+  @@index([subject, topic])
+  @@index([difficulty, subject])
+  @@index([isActive, isPublic])
+  @@map("questions")
+}
+
+// 解答モデル
+model Answer {
+  id        String   @id @default(cuid())
+  content   String   // ユーザーの解答
+  isCorrect Boolean
+  timeSpent Int?     // 解答にかかった時間（秒）
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // 関連
+  userId     String
+  questionId String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  assessmentSessionId String?
+  assessmentSession   AssessmentSession? @relation(fields: [assessmentSessionId], references: [id])
+  
+  @@unique([userId, questionId])
+  @@map("answers")
+}
+
+// 適応的診断テストセッション
+model AssessmentSession {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  configId          String   // 診断テスト設定ID
+  status            AssessmentStatus @default(IN_PROGRESS)
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  currentQuestionId String?
+  currentDifficulty Int      @default(5) // 1-10
+  questionsAnswered Int      @default(0)
+  correctAnswers    Int      @default(0)
+  resultId          String?  @unique
+  result            AssessmentResult? @relation(fields: [resultId], references: [id])
+  answers           Answer[]
+  lastAnsweredAt    DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("assessment_sessions")
+}
+
+// 診断テスト結果
+model AssessmentResult {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessionId         String   @unique
+  session           AssessmentSession?
+  overallScore      Int
+  overallPercentage Float
+  totalQuestions    Int
+  correctAnswers    Int
+  timeSpent         Int      // seconds
+  subjects          String   // JSON string of subject analysis
+  recommendations   String   // JSON string of recommendations
+  strengths         String   // JSON string of strengths
+  weaknesses        String   // JSON string of weaknesses
+  nextSteps         String   // JSON string of next steps
+  completedAt       DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("assessment_results")
+}
+
+// 問題タグ関連モデル
+model Tag {
+  id          String        @id @default(cuid())
+  name        String        @unique
+  description String?
+  color       String?       // タグの色（UI用）
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  questionTags QuestionTag[]
+  
+  @@map("tags")
+}
+
+model QuestionTag {
+  id         String   @id @default(cuid())
+  questionId String
+  tagId      String
+  createdAt  DateTime @default(now())
+  
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  tag      Tag      @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  
+  @@unique([questionId, tagId])
+  @@map("question_tags")
+}
+
+// 問題カテゴリ関連モデル
+model Category {
+  id          String             @id @default(cuid())
+  name        String
+  description String?
+  parentId    String?            // 階層構造対応
+  level       Int                @default(0)
+  sortOrder   Int                @default(0)
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  
+  parent       Category?           @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children     Category[]          @relation("CategoryHierarchy")
+  questionCategories QuestionCategory[]
+  
+  @@unique([name, parentId])
+  @@index([parentId, sortOrder])
+  @@map("categories")
+}
+
+model QuestionCategory {
+  id         String   @id @default(cuid())
+  questionId String
+  categoryId String
+  createdAt  DateTime @default(now())
+  
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  
+  @@unique([questionId, categoryId])
+  @@map("question_categories")
+}
+
+// 問題インポート管理
+model QuestionImport {
+  id            String            @id @default(cuid())
+  filename      String
+  originalName  String
+  fileSize      Int
+  mimeType      String
+  status        ImportStatus      @default(PENDING)
+  totalRows     Int?
+  processedRows Int               @default(0)
+  successRows   Int               @default(0)
+  errorRows     Int               @default(0)
+  errors        String?           // JSON形式のエラー詳細
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdBy     String
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  
+  @@map("question_imports")
+}
+
+// 学習スタイル診断結果
+model LearningStyleResult {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  visualScore     Int      @default(0)
+  auditoryScore   Int      @default(0)
+  kinestheticScore Int     @default(0)
+  readingScore    Int      @default(0)
+  primaryStyle    LearningStyle
+  secondaryStyle  LearningStyle?
+  answers         String   // JSON string of answers
+  recommendations String   // JSON string of recommendations
+  studyTips       String   // JSON string of study tips
+  completedAt     DateTime @default(now())
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("learning_style_results")
+}
+
+// 学習進捗モデル
+model LearningProgress {
+  id            String           @id @default(cuid())
+  status        ProgressStatus   @default(NOT_STARTED)
+  completedAt   DateTime?
+  score         Float?           // 0-100のスコア
+  timeSpent     Int?             // 学習時間（分）
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  // 関連
+  userId   String
+  courseId String?
+  lessonId String?
+  user     User     @relation(fields: [userId], references: [id])
+  course   Course?  @relation(fields: [courseId], references: [id])
+  lesson   Lesson?  @relation(fields: [lessonId], references: [id])
+  
+  @@unique([userId, courseId])
+  @@unique([userId, lessonId])
+  @@map("learning_progress")
+}
+
+// 診断結果モデル
+model Assessment {
+  id          String         @id @default(cuid())
+  type        AssessmentType
+  result      Json           // 診断結果（JSON形式）
+  score       Float          // 総合スコア
+  strengths   String[]       // 強み
+  weaknesses  String[]       // 弱み
+  recommendations String[]   // 推奨事項
+  createdAt   DateTime       @default(now())
+
+  // 関連
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+  
+  @@map("assessments")
+}
+
+// Enums
+enum UserRole {
+  LEARNER   // 学習者
+  PARENT    // 保護者
+  EDUCATOR  // 教育者
+  ADMIN     // 管理者
+}
+
+enum LearningStyle {
+  VISUAL    // 視覚的学習
+  AUDITORY  // 聴覚的学習
+  KINESTHETIC // 体感的学習
+  READING   // 読書・文字学習
+}
+
+enum AssessmentStatus {
+  IN_PROGRESS
+  COMPLETED
+  ABANDONED
+  EXPIRED
+}
+
+enum Subject {
+  MATH      // 数学
+  JAPANESE  // 国語
+  ENGLISH   // 英語
+  SCIENCE   // 理科
+  SOCIAL    // 社会
+  OTHER     // その他
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum LessonType {
+  LECTURE   // 講義
+  EXERCISE  // 演習
+  QUIZ      // クイズ
+  PROJECT   // プロジェクト
+}
+
+enum QuestionType {
+  MULTIPLE_CHOICE  // 選択肢
+  TRUE_FALSE      // 正誤問題
+  SHORT_ANSWER    // 短答
+  ESSAY           // 記述
+  FILL_BLANK      // 穴埋め
+}
+
+enum ProgressStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  COMPLETED
+  PAUSED
+}
+
+enum AssessmentType {
+  INITIAL       // 初回診断
+  PERIODIC      // 定期診断
+  FINAL         // 最終診断
+}
+
+enum ImportStatus {
+  PENDING       // 待機中
+  PROCESSING    // 処理中
+  COMPLETED     // 完了
+  FAILED        // 失敗
+  CANCELLED     // キャンセル
+  LEARNING_STYLE // 学習スタイル診断
+}
